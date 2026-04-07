@@ -1,0 +1,12 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^python -c \"import urllib\\.request; urls=\\['https://cravatar\\.eu/avatar/steve/64\\.png','https://cravatar\\.eu/avatars/steve/64\\.png','http://cravatar\\.eu/avatar/steve/64\\.png','http://cravatar\\.eu/avatars/steve/64\\.png'\\]; import sys; \nfor url in urls:\n    try:\n        req=urllib\\.request\\.Request\\(url, method='HEAD'\\)\n        with urllib\\.request\\.urlopen\\(req, timeout=10\\) as r:\n            print\\(url, r\\.status, r\\.getheader\\('Content-Type'\\)\\)\n    except Exception as e:\n        print\\(url, 'ERR', type\\(e\\)\\.__name__, e\\)\n\"$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^cd /d D:\\\\Humita-Launcher ; python -c \"import urllib\\.request; urls=\\['https://cravatar\\.eu/avatar/steve','https://cravatar\\.eu/avatar/steve\\.png','https://cravatar\\.eu/avatar/steve/64\\.png','https://cravatar\\.eu/avatar/char/64\\.png'\\];\nfor url in urls:\n    try:\n        req=urllib\\.request\\.Request\\(url, method='GET', headers=\\{'User-Agent':'Mozilla/5\\.0'\\}\\)\n        with urllib\\.request\\.urlopen\\(req, timeout=10\\) as r:\n            print\\(url, r\\.status, r\\.getheader\\('Content-Type'\\), len\\(r\\.read\\(\\)\\)\\)\n    except Exception as e:\n        print\\(url, 'ERR', type\\(e\\)\\.__name__, e\\)\n\"$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}

@@ -14,12 +14,24 @@ const state = {
 // ─── Init ──────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
   setupNav()
-  setupTitlebar()
   setupSettings()
   setupVersions()
   setupLogs()
   setupAuth()
   await refreshUserState()
+  
+  // Show auth modal on first launch if no user is logged in
+  setTimeout(async () => {
+    const cfg = await window.api.config.getAll()
+    if (!cfg.username && !cfg.hasShownAuthOnFirstLaunch) {
+      const authModal = document.getElementById('authModal')
+      if (authModal) {
+        authModal.style.display = 'flex'
+      }
+      // Mark that we've shown the auth modal on first launch
+      await window.api.config.set('hasShownAuthOnFirstLaunch', 'true')
+    }
+  }, 500)
 })
 
 // ─── Navigation ────────────────────────────────────────────────
@@ -42,20 +54,19 @@ function setupNav() {
 }
 
 // ─── Titlebar ──────────────────────────────────────────────────
-function setupTitlebar() {
-  document.getElementById('maxBtn').addEventListener('click', async () => {
-    await window.api.window.maximize()
-    const isMax = await window.api.window.isMaximized()
-    document.getElementById('maxBtn').textContent = isMax ? '❐' : '□'
-  })
-}
 
 // ─── User state ────────────────────────────────────────────────
+async function updatePlayerSkin(identifier) {
+  const skinImg = document.getElementById('userSkin')
+  if (!skinImg) return
+  skinImg.src = `https://cravatar.eu/avatar/${encodeURIComponent(identifier)}.png`
+}
+
 async function refreshUserState() {
   const cfg = await window.api.config.getAll()
 
   // Sidebar user chip
-  const avatar   = document.getElementById('userAvatar')
+  const avatar   = document.getElementById('userSkin')
   const nameEl   = document.getElementById('userName')
   const playBtn  = document.getElementById('playBtn')
   const homeName = document.getElementById('homeUsername')
@@ -63,14 +74,18 @@ async function refreshUserState() {
   const homeBadge= document.getElementById('homeBadge')
 
   if (cfg.username) {
-    avatar.textContent  = cfg.username[0].toUpperCase()
+    if (avatar && avatar.tagName === 'IMG') {
+      await updatePlayerSkin(cfg.username)
+    }
     nameEl.textContent  = cfg.username
     homeName.textContent= `Hola, ${cfg.username}!`
     homeAuth.textContent= cfg.authType === 'microsoft' ? 'Cuenta Microsoft' : 'Modo Offline'
     homeBadge.textContent = cfg.authType === 'microsoft' ? '🟢 MS' : '🟡 Offline'
     playBtn.disabled    = false
   } else {
-    avatar.textContent  = '?'
+    if (avatar && avatar.tagName === 'IMG') {
+      avatar.src = 'https://cravatar.eu/avatar/steve.png'
+    }
     nameEl.textContent  = 'Sin sesión'
     homeName.textContent= 'No has iniciado sesión'
     homeAuth.textContent= 'Ve a Ajustes para iniciar sesión'
@@ -87,6 +102,15 @@ async function refreshUserState() {
 
 // ─── Auth ──────────────────────────────────────────────────────
 function setupAuth() {
+  // Toggle auth modal when clicking status card
+  const statusCard = document.getElementById('statusCardHome')
+  const authModal = document.getElementById('authModal')
+  if (statusCard && authModal) {
+    statusCard.addEventListener('click', () => {
+      authModal.style.display = authModal.style.display === 'none' ? 'flex' : 'none'
+    })
+  }
+
   document.getElementById('btnMicrosoft').addEventListener('click', async () => {
     const btn = document.getElementById('btnMicrosoft')
     btn.disabled = true
@@ -114,6 +138,7 @@ function setupAuth() {
     const res = await window.api.auth.loginOffline(username)
     closeModal('offlineModal')
     if (res.success) {
+      updatePlayerSkin(username)
       setAuthMsg(`✅ Sesión iniciada como ${res.username}`, 'success')
       await refreshUserState()
       updateAuthUI(true)
@@ -138,13 +163,27 @@ function setupAuth() {
 function updateAuthUI(loggedIn) {
   const logoutBtn   = document.getElementById('btnLogout')
   const authStatus  = document.getElementById('authStatus')
+  const authModal   = document.getElementById('authModal')
+  const homeUsername = document.getElementById('homeUsername')
+  const homeAuthType = document.getElementById('homeAuthType')
+  
   logoutBtn.disabled= !loggedIn
+  
+  // Close auth modal after successful login
+  if (loggedIn && authModal) {
+    authModal.style.display = 'none'
+  }
 
   window.api.config.getAll().then(cfg => {
     if (cfg.username) {
-      authStatus.textContent = `✅ Sesión iniciada como ${cfg.username} (${cfg.authType})`
+      const statusText = `✅ Sesión iniciada como ${cfg.username} (${cfg.authType})`
+      if (authStatus) authStatus.textContent = statusText
+      if (homeUsername) homeUsername.textContent = `${cfg.username}`
+      if (homeAuthType) homeAuthType.textContent = `${cfg.authType}`
     } else {
-      authStatus.textContent = '❌ No has iniciado sesión'
+      if (authStatus) authStatus.textContent = '❌ No has iniciado sesión'
+      if (homeUsername) homeUsername.textContent = 'No has iniciado sesión'
+      if (homeAuthType) homeAuthType.textContent = 'Haz clic para iniciar sesión'
     }
   })
 }

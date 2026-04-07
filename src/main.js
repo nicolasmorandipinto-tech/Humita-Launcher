@@ -15,8 +15,13 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 960,
     height: 620,
-    minWidth: 800,
-    minHeight: 540,
+    minWidth: 960,
+    minHeight: 620,
+    maxWidth: 960,
+    maxHeight: 620,
+    resizable: false,
+    maximizable: false,
+    fullscreenable: false,
     frame: false,
     transparent: false,
     backgroundColor: '#1a1a2e',
@@ -46,11 +51,7 @@ app.on('window-all-closed', () => {
 
 // ─── Window controls ──────────────────────────────────────────
 ipcMain.on('window:minimize', () => mainWindow.minimize())
-ipcMain.on('window:maximize', () => {
-  mainWindow.isMaximized() ? mainWindow.unmaximize() : mainWindow.maximize()
-})
 ipcMain.on('window:close', () => mainWindow.close())
-ipcMain.handle('window:isMaximized', () => mainWindow.isMaximized())
 
 // ─── Config ───────────────────────────────────────────────────
 ipcMain.handle('config:get', (_, key) => config.get(key))
