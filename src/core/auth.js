@@ -6,7 +6,7 @@ const { shell, BrowserWindow } = require('electron')
 const config = require('../utils/config')
 
 // ─── Constantes Microsoft / Xbox / Minecraft ──────────────────
-const MS_CLIENT_ID    = '00000000402b5328'   // Client ID público oficial de Minecraft Launcher
+const MS_CLIENT_ID    = '00000000402b5328'
 const MS_REDIRECT_URI = 'https://login.live.com/oauth20_desktop.srf'
 const MS_SCOPE        = 'XboxLive.signin%20offline_access'
 
@@ -60,7 +60,7 @@ function request(url, options = {}, body = null) {
     })
 
     req.on('error', reject)
-    req.setTimeout(20000, () => { req.destroy(); reject(new Error('Timeout')) })
+    req.setTimeout(10000, () => { req.destroy(); reject(new Error('Timeout')) })
     if (body) req.write(typeof body === 'string' ? body : JSON.stringify(body))
     req.end()
   })
@@ -70,6 +70,8 @@ function request(url, options = {}, body = null) {
 
 function openMicrosoftLogin() {
   return new Promise((resolve, reject) => {
+    let resolved = false
+
     const authUrl =
       `${URLS.msAuth}?client_id=${MS_CLIENT_ID}` +
       `&response_type=code` +
@@ -78,57 +80,87 @@ function openMicrosoftLogin() {
       `&prompt=select_account`
 
     const win = new BrowserWindow({
-      width:  500,
+      width: 500,
       height: 650,
-      title:  'Iniciar sesión con Microsoft',
+      title: 'Iniciar sesión con Microsoft',
+      show: false,
       webPreferences: {
         nodeIntegration: false,
         contextIsolation: true,
+        sandbox: true,
       },
     })
 
     win.loadURL(authUrl)
     win.show()
 
-    // Detectar cuando Microsoft redirige con el code
+    // Timeout de 5 minutos
+    const timeout = setTimeout(() => {
+      if (!resolved) {
+        resolved = true
+        win.destroy()
+        reject(new Error('Se agotó el tiempo de espera.'))
+      }
+    }, 300000)
+
+    // Detectar redirección capturando code de la URL
+    const checkUrl = (url) => {
+      try {
+        if (url.includes(MS_REDIRECT_URI)) {
+          const parsed = new URL(url)
+          const code = parsed.searchParams.get('code')
+          const error = parsed.searchParams.get('error')
+
+          if (!resolved) {
+            resolved = true
+            clearTimeout(timeout)
+
+            if (error) {
+              const errorDesc = parsed.searchParams.get('error_description') || ''
+              win.destroy()
+              reject(new Error(`${error}: ${errorDesc}`))
+            } else if (code) {
+              win.destroy()
+              resolve(code)
+            }
+          }
+          return true
+        }
+      } catch (e) {
+        console.error('Error parsing redirect URL:', e)
+      }
+      return false
+    }
+
     win.webContents.on('will-redirect', (event, url) => {
-      checkForCode(url, win, resolve, reject)
+      if (checkUrl(url)) {
+        event.preventDefault()
+      }
     })
 
     win.webContents.on('will-navigate', (event, url) => {
-      checkForCode(url, win, resolve, reject)
+      if (checkUrl(url)) {
+        event.preventDefault()
+      }
     })
 
-    // También revisar la URL actual al cargar
     win.webContents.on('did-navigate', (event, url) => {
-      checkForCode(url, win, resolve, reject)
+      checkUrl(url)
+    })
+
+    // Capturar cambios de historial
+    win.webContents.on('did-navigate-in-page', (event, url) => {
+      checkUrl(url)
     })
 
     win.on('closed', () => {
-      reject(new Error('Ventana cerrada por el usuario.'))
+      if (!resolved) {
+        resolved = true
+        clearTimeout(timeout)
+        reject(new Error('Ventana cerrada por el usuario.'))
+      }
     })
   })
-}
-
-function checkForCode(url, win, resolve, reject) {
-  try {
-    const parsed = new URL(url)
-    if (!url.startsWith(MS_REDIRECT_URI)) return
-
-    const code  = parsed.searchParams.get('code')
-    const error = parsed.searchParams.get('error')
-
-    if (error) {
-      win.destroy()
-      reject(new Error(`Error de Microsoft: ${error} — ${parsed.searchParams.get('error_description') || ''}`))
-      return
-    }
-
-    if (code) {
-      win.destroy()
-      resolve(code)
-    }
-  } catch {}
 }
 
 // ─── Intercambio de code por tokens ───────────────────────────
@@ -284,13 +316,20 @@ async function loginMicrosoft() {
 
   } catch (err) {
     // Mensajes de error más amigables
-    let message = err.message
+    let message = err.message || 'Error desconocido'
+    
+    console.error('Microsoft login error:', message)
+    
     if (message.includes('2148916233')) message = 'Esta cuenta no tiene una cuenta de Xbox. Crea una en xbox.com primero.'
     if (message.includes('2148916235')) message = 'Xbox Live no está disponible en tu país.'
     if (message.includes('2148916236') || message.includes('2148916237')) message = 'Necesitas verificar tu edad en Xbox para jugar.'
-    if (message.includes('cerrada'))    message = 'Inicio de sesión cancelado.'
+    if (message.includes('cerrada')) message = 'Inició sesión cancelada por el usuario.'
+    if (message.includes('Timeout')) message = 'Se agotó el tiempo de espera. Intenta de nuevo.'
 
-    return { success: false, message }
+    return { 
+      success: false, 
+      message: message || 'Error durante el inicio de sesión con Microsoft'
+    }
   }
 }
 
@@ -298,8 +337,11 @@ async function loginMicrosoft() {
 
 async function refreshSession() {
   const refreshToken = config.get('refreshToken')
-  if (!refreshToken || config.get('authType') !== 'microsoft') {
-    return { success: false, message: 'No hay sesión de Microsoft activa.' }
+  const authType = config.get('authType')
+  
+  // Si no es Microsoft o no hay refresh token, no hacer nada
+  if (!refreshToken || authType !== 'microsoft') {
+    return { success: true, message: 'Sin sesión Microsoft' }
   }
 
   try {
@@ -315,6 +357,7 @@ async function refreshSession() {
 
     return { success: true }
   } catch (err) {
+    console.error('Refresh error:', err.message)
     return { success: false, message: err.message }
   }
 }

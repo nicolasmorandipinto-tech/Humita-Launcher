@@ -2,184 +2,241 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' https://i.ytimg.com https://cravatar.eu; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' https://preview.redd.it https://i.ytimg.com https://cravatar.eu https://i.blogs.es; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com;">
+  <link href="https://fonts.googleapis.com/css2?family=Raleway:wght@800&display=swap" rel="stylesheet">
   <title>Humita Launcher</title>
   <link rel="stylesheet" href="styles/main.css">
 </head>
 <body>
 
-  <!-- Title bar -->
-  <div class="titlebar" id="titlebar">
-    <div class="titlebar-drag">
-      <span class="titlebar-icon"></span>
-      <span class="titlebar-title">Humita Launcher</span>
+  <!-- ══════════════════════════════════════════
+       PANTALLA DE LOGIN (se oculta tras login)
+       ══════════════════════════════════════════ -->
+  <div id="loginScreen" style="display:none;">
+    <div class="login-titlebar" id="loginTitlebar">
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span style="font-size:13px;font-weight:600;color:var(--text-secondary);letter-spacing:.4px;">Humita Launcher</span>
+      </div>
+      <div style="-webkit-app-region:no-drag;display:flex;">
+        <button class="wbtn close" onclick="window.api.window.close()">✕</button>
+      </div>
     </div>
-    <div class="titlebar-controls">
-      <button class="wbtn minimize" onclick="window.api.window.minimize()" title="Minimizar">─</button>
-      <button class="wbtn close"    onclick="window.api.window.close()"    title="Cerrar">✕</button>
+
+    <div class="login-body">
+      <div class="login-card">
+        <div class="login-logo">HUMITA</div>
+        <div class="login-logo-sub">LAUNCHER</div>
+
+        <div class="login-title">Bienvenido</div>
+        <div class="login-desc">Inicia sesión para continuar</div>
+
+        <div class="login-btns">
+          <button class="login-btn-ms" id="loginBtnMs">
+            <span class="login-btn-icon"></span>
+            Iniciar sesión con Microsoft
+          </button>
+          <button class="login-btn-offline" id="loginBtnOffline">
+            <span class="login-btn-icon"></span>
+            Continuar sin cuenta (Offline)
+          </button>
+        </div>
+
+        <div class="login-msg" id="loginMsg"></div>
+
+        <div class="login-note">
+          Con Microsoft puedes jugar en servidores online.<br>
+          Offline solo permite servidores sin autenticación.
+        </div>
+      </div>
     </div>
   </div>
 
-  <!-- App layout -->
-  <div class="app">
+  <!-- ══════════════════════════════════════════
+        APP PRINCIPAL (oculta hasta login)
+        ══════════════════════════════════════════ -->
+  <div id="mainApp" style="display:none;">
 
-    <!-- Sidebar -->
-    <aside class="sidebar">
-      <div class="sidebar-logo">
-        <div class="logo-text">HUMITA</div>
-        <div class="logo-sub">LAUNCHER</div>
+    <!-- Title bar -->
+    <div class="titlebar" id="titlebar">
+      <div class="titlebar-drag">
+        <span class="titlebar-icon"></span>
+        <span class="titlebar-title">Humita Launcher</span>
       </div>
-
-      <nav class="sidebar-nav">
-        <button class="nav-btn active" data-page="home">
-          <span class="nav-icon"></span>
-          <span>Inicio</span>
-        </button>
-        <button class="nav-btn" data-page="settings">
-          <span class="nav-icon"></span>
-          <span>Ajustes</span>
-        </button>
-      </nav>
-
-      <div class="sidebar-footer">
-        <div class="user-chip" id="userChip">
-          <img id="userSkin" src="https://cravatar.eu/avatar/steve.png" alt="Skin" class="user-avatar" onerror="this.src='https://cravatar.eu/avatar/steve'">
-          <span class="user-name" id="userName">Sin sesión</span>
-        </div>
-        <div class="version-tag">v1.0.0</div>
+      <div class="titlebar-controls">
+        <button class="wbtn minimize" onclick="window.api.window.minimize()" title="Minimizar">─</button>
+        <button class="wbtn close"    onclick="window.api.window.close()"    title="Cerrar">✕</button>
       </div>
-    </aside>
+    </div>
 
-    <!-- Content -->
-    <main class="content">
+    <!-- App layout -->
+    <div class="app">
 
-      <!-- HOME PAGE -->
-      <section class="page active" id="page-home">        <div id="authSection">
-          <div class="status-card-clickable" id="statusCardHome" style="cursor: pointer; margin-bottom: 40px; display:none;">
-            <div class="card">
-              <div class="card-icon"></div>
-              <div class="card-body">
-                <div class="card-title" id="homeUsername">No has iniciado sesión</div>
-                <div class="card-desc" id="homeAuthType">Haz clic para iniciar sesión</div>
-              </div>
-            </div>
-          </div>
-
-          <div id="authModal" style="display:none; margin-bottom: 40px;">
-            <div class="settings-card">
-              <div class="settings-btns">
-                <button class="btn-primary" id="btnMicrosoft">Microsoft</button>
-                <button class="btn-secondary" id="btnOffline">Offline</button>
-                <button class="btn-danger" id="btnLogout" disabled>Cerrar sesión</button>
-              </div>
-              <div class="settings-msg" id="authMsg"></div>
-            </div>
-          </div>
+      <!-- Sidebar -->
+      <aside class="sidebar">
+        <div class="sidebar-logo">
+          <div class="logo-text">HUMITA</div>
+          <div class="logo-sub">LAUNCHER</div>
         </div>
 
-        <div class="play-zone" style="margin-top: 420px;">
-          <button class="play-btn" id="playBtn" disabled>
-            <span class="play-icon">▶</span>
-            JUGAR
+        <nav class="sidebar-nav">
+          <button class="nav-btn active" data-page="home">
+            <span class="nav-icon"></span>
+            <span>Inicio</span>
           </button>
-          <button class="secondary-btn" onclick="navigate('versions')">Ver versiones</button>
-        </div>
-      </section>
+          <button class="nav-btn" data-page="settings">
+            <span class="nav-icon"></span>
+            <span>Ajustes</span>
+          </button>
+        </nav>
 
-      <!-- VERSIONS PAGE -->
-      <section class="page" id="page-versions">
-        <div class="page-header">
-          <h1>Versiones de Minecraft</h1>
-          <div class="header-actions">
-            <label class="toggle-label">
-              <input type="checkbox" id="snapshotsToggle"> Snapshots
-            </label>
-            <button class="icon-btn" id="refreshVersions" title="Recargar">↺</button>
+        <div class="sidebar-footer">
+          <div class="user-chip" id="userChip">
+            <img id="userSkin" src="https://cravatar.eu/avatar/steve" alt="Skin" class="user-avatar">
+            <div style="min-width:0;">
+              <div class="user-name" id="userName">Sin sesión</div>
+              <div class="user-type" id="userType"></div>
+            </div>
           </div>
+          <button class="logout-btn" id="sidebarLogout">↩ Cerrar sesión</button>
+          <div class="version-tag">v1.0.0</div>
         </div>
+      </aside>
 
-        <div class="versions-layout">
-          <div class="versions-list" id="versionsList">
-            <div class="loading-state">
-              <div class="spinner"></div>
-              <p>Cargando versiones...</p>
+      <!-- Content -->
+      <main class="content">
+
+        <!-- HOME PAGE -->
+        <section class="page active" id="page-home">
+          <div class="home-welcome">
+            <img id="homeAvatar" src="https://cravatar.eu/avatar/steve" class="home-avatar">
+            <div>
+              <div class="home-hello" id="homeUsername">Hola, Jugador!</div>
+              <div class="home-authtype" id="homeAuthType">Modo Offline</div>
             </div>
           </div>
 
-          <div class="version-detail" id="versionDetail">
-            <div class="detail-empty">
-              <div class="detail-empty-icon">◈</div>
-              <p>Selecciona una versión</p>
+          <div class="play-zone">
+            <div class="play-container">
+              <button class="play-btn" id="playBtn" disabled>
+                <span class="play-icon">▶</span>
+                <span class="play-text">JUGAR</span>
+                <div class="play-version-info" id="playVersionInfo">
+                  <span class="play-version" id="playVersion">Seleccionar</span>
+                </div>
+              </button>
+              <button class="play-dropdown" id="playDropdown" type="button">⬏</button>
             </div>
-          </div>
-        </div>
-
-        <div class="progress-bar-wrap" id="progressWrap" style="display:none">
-          <div class="progress-label" id="progressLabel">Instalando...</div>
-          <div class="progress-bar">
-            <div class="progress-fill" id="progressFill" style="width:0%"></div>
-          </div>
-        </div>
-      </section>
-
-      <!-- SETTINGS PAGE -->
-      <section class="page" id="page-settings">
-        <div class="page-header"><h1>Ajustes</h1></div>
-
-        <div class="settings-sections">
-
-          <div class="settings-section">
-            <h2 class="settings-title">Java</h2>
-            <div class="settings-card">
-              <div class="field-row">
-                <label>Ruta de Java</label>
-                <input type="text" id="javaPath" placeholder="Auto-detectar" class="field-input">
-                <button class="btn-secondary" id="detectJava">Detectar</button>
-                <button class="btn-primary"   id="saveJava">Guardar</button>
-              </div>
-              <div class="field-note" id="javaNote"></div>
-            </div>
-          </div>
-
-          <div class="settings-section">
-            <h2 class="settings-title">Memoria RAM</h2>
-            <div class="settings-card">
-              <div class="field-row">
-                <label>Mínimo</label>
-                <input type="text" id="ramMin" value="1G" class="field-input field-short">
-                <label>Máximo</label>
-                <input type="text" id="ramMax" value="2G" class="field-input field-short">
-                <button class="btn-primary" id="saveRam">Guardar</button>
-              </div>
-              <div class="field-note">Ejemplos: 512M · 1G · 2G · 4G</div>
-            </div>
-          </div>
-
-          <div class="settings-section">
-            <h2 class="settings-title">Directorio de Minecraft</h2>
-            <div class="settings-card">
-              <div class="field-row">
-                <input type="text" id="mcDir" class="field-input" style="flex:1">
-                <button class="btn-primary" id="saveMcDir">Guardar</button>
+            <div class="play-loading" id="playLoading" style="display:none;">
+              <div class="progress-bar-full">
+                <div class="progress-fill" id="playProgress" style="width:0%"></div>
               </div>
             </div>
           </div>
 
-        </div>
-      </section>
+          <div class="home-version-info" id="homeVersionInfo" style="display:none;">
+            <span class="home-version-label">Última versión:</span>
+            <span class="home-version-val" id="homeVersion">—</span>
+          </div>
 
-      <!-- LOGS PAGE -->
-      <section class="page" id="page-logs">
-        <div class="page-header">
-          <h1>Logs</h1>
-          <button class="icon-btn" id="clearLogs" title="Limpiar">🗑</button>
-        </div>
-        <div class="logs-container">
-          <pre class="logs-output" id="logsOutput"></pre>
-        </div>
-      </section>
+          <div class="launch-status" id="homeStatus" style="display:none;">
+            <div class="status-bar">
+              <div class="status-pulse"></div>
+              <div class="status-text" id="homeStatusText">Lanzando Minecraft...</div>
+            </div>
+          </div>
+        </section>
 
-    </main>
+        <!-- VERSIONS PAGE -->
+        <section class="page" id="page-versions">
+          <div class="page-header">
+            <h1>Versiones de Minecraft</h1>
+            <div class="header-actions">
+              <label class="toggle-label">
+                <input type="checkbox" id="snapshotsToggle"> Snapshots
+              </label>
+              <button class="icon-btn" id="refreshVersions" title="Recargar">↺</button>
+            </div>
+          </div>
+
+          <div class="versions-layout">
+            <div class="versions-list" id="versionsList">
+              <div class="loading-state">
+                <div class="spinner"></div>
+                <p>Cargando versiones...</p>
+              </div>
+            </div>
+            <div class="version-detail" id="versionDetail">
+              <div class="detail-empty">
+                <div class="detail-empty-icon">◈</div>
+                <p>Selecciona una versión</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="progress-bar-wrap" id="versionsProgressWrap" style="display:none">
+            <div class="progress-label" id="versionsProgressLabel">Instalando...</div>
+            <div class="progress-bar">
+              <div class="progress-fill" id="versionsProgressFill" style="width:0%"></div>
+            </div>
+          </div>
+
+          <div class="launch-status" id="versionsStatus" style="display:none;">
+            <div class="status-bar">
+              <div class="status-pulse"></div>
+              <div class="status-text" id="versionsStatusText">Lanzando Minecraft...</div>
+            </div>
+          </div>
+        </section>
+
+        <!-- SETTINGS PAGE -->
+        <section class="page" id="page-settings">
+          <div class="page-header"><h1>Ajustes</h1></div>
+          <div class="settings-sections">
+
+            <div class="settings-section">
+              <h2 class="settings-title">Java</h2>
+              <div class="settings-card">
+                <div class="field-row">
+                  <label>Ruta de Java</label>
+                  <input type="text" id="javaPath" placeholder="Auto-detectar" class="field-input">
+                  <button class="btn-secondary" id="detectJava">Detectar</button>
+                  <button class="btn-primary"   id="saveJava">Guardar</button>
+                </div>
+                <div class="field-note" id="javaNote"></div>
+              </div>
+            </div>
+
+            <div class="settings-section">
+              <h2 class="settings-title">Memoria RAM</h2>
+              <div class="settings-card">
+                <div class="field-row">
+                  <label>Mínimo</label>
+                  <input type="text" id="ramMin" value="1G" class="field-input field-short">
+                  <label>Máximo</label>
+                  <input type="text" id="ramMax" value="2G" class="field-input field-short">
+                  <button class="btn-primary" id="saveRam">Guardar</button>
+                </div>
+                <div class="field-note">Ejemplos: 512M · 1G · 2G · 4G</div>
+              </div>
+            </div>
+
+            <div class="settings-section">
+              <h2 class="settings-title">Directorio de Minecraft</h2>
+              <div class="settings-card">
+                <div class="field-row">
+                  <input type="text" id="mcDir" class="field-input" style="flex:1">
+                  <button class="btn-primary" id="saveMcDir">Guardar</button>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </section>
+
+
+
+      </main>
+    </div>
   </div>
 
   <!-- Offline login modal -->
@@ -187,10 +244,10 @@
     <div class="modal">
       <h2>Login Offline</h2>
       <p>Ingresa tu nombre de usuario:</p>
-      <input type="text" id="offlineUsername" placeholder="Jugador123" class="field-input" maxlength="16">
+      <input type="text" id="offlineUsername" class="field-input" maxlength="16">
       <div class="modal-btns">
         <button class="btn-secondary" onclick="closeModal('offlineModal')">Cancelar</button>
-        <button class="btn-primary"   id="confirmOffline">Continuar</button>
+        <button class="btn-primary" id="confirmOffline">Continuar</button>
       </div>
     </div>
   </div>

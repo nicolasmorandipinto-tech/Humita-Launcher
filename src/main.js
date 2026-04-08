@@ -64,9 +64,11 @@ ipcMain.handle('auth:loginOffline', async (_, username) => {
 })
 
 ipcMain.handle('auth:loginMicrosoft', async () => {
-  return await authManager.loginMicrosoft((event, data) => {
-    mainWindow.webContents.send('auth:deviceCode', data)
-  })
+  return await authManager.loginMicrosoft()
+})
+
+ipcMain.handle('auth:refresh', async () => {
+  return await authManager.refreshSession()
 })
 
 ipcMain.handle('auth:logout', () => {
