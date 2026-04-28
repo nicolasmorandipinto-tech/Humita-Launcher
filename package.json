@@ -32,7 +32,7 @@
     "publish": {
       "provider": "github",
       "owner": "eLcompletoxd",
-      "repo": "https://github.com/eLcompletoxd/Humita-Launcher"
+      "repo": "Humita-Launcher"
     },
     "win": {
       "target": "nsis",
