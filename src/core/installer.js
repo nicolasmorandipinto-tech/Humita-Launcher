@@ -13,7 +13,7 @@ const crypto = require('crypto')
 
 const config         = require('../utils/config')
 const versionManager = require('./versionManager')
-const { download, friendlyError } = require('../utils/http')
+const { download, downloadWithRetry, friendlyError } = require('../utils/http')
 const { InstallStateManager }     = require('../utils/installStateManager')
 
 const CONCURRENCY_LIBS   = 16
@@ -300,16 +300,18 @@ async function downloadAssets(assetIndexInfo, mcDir, onProgress, stateManager, i
     try {
       await download(assetIndexInfo.url, indexFile)
     } catch (err) {
-      throw new Error(`No se pudo descargar el índice de assets: ${friendlyError(err)}`)
-    }
+      throw new Error(`No se pudo descargar el índice de assets: ${friendlyError(err)}`,
+    { cause: err }
+  )
+}
   }
 
   let objects
   try {
     objects = Object.values(JSON.parse(fs.readFileSync(indexFile, 'utf-8')).objects || {})
-  } catch {
-    throw new Error('El índice de assets está corrupto. Borra el archivo e intenta de nuevo.')
-  }
+  } catch (e) {
+    throw new Error(`El índice de assets está corrupto. Borra el archivo e intenta de nuevo. ${e.message}`, { cause: e })
+}
 
   const pending = objects.filter(({ hash }) =>
     !fs.existsSync(path.join(objDir, hash.slice(0, 2), hash))
@@ -348,8 +350,16 @@ async function downloadAssets(assetIndexInfo, mcDir, onProgress, stateManager, i
 
     try {
       await download(`https://resources.download.minecraft.net/${prefix}/${hash}`, objPath)
-    } catch {
+    } catch (err) {
       assetErrors++
+      // FIX 7: registrar el error amigable para el reporte final.
+      // Antes solo se incrementaba el contador y el usuario nunca sabía
+      // si era un problema de red puntual o de disco lleno.
+      const friendly = friendlyError(err)
+      if (assetErrors <= 3) {
+        // Mostrar hasta 3 errores distintos para no saturar el log
+        console.warn(`[installer] Asset ${hash.slice(0, 8)} falló: ${friendly}`)
+      }
     }
 
     done++
@@ -366,7 +376,14 @@ async function downloadAssets(assetIndexInfo, mcDir, onProgress, stateManager, i
   }), CONCURRENCY_ASSETS)
 
   if (assetErrors > 0) {
+    // FIX 7: reportar al usuario en la UI, no solo en consola.
+    // Si el error fue ENOSPC el usuario necesita saber para liberar espacio.
     console.warn(`[installer] ${assetErrors} assets fallaron al descargar`)
+    onProgress({
+      step:    'assets',
+      message: `⚠ ${assetErrors} asset(s) no se descargaron. El juego puede no tener sonido o texturas.`,
+      percent: 95,
+    })
   }
 }
 

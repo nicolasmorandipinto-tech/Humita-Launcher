@@ -1,13 +1,26 @@
 /**
  * core/modpackManager.js
  *
- * CAMBIOS:
+ * CAMBIOS ORIGINALES:
+ * - LOADER: si el modpack tiene campo `loader` (fabric/forge + version),
+ *   se instala el loader automáticamente después del vanilla
  * - PUNTO 7:  cada modpack usa su propia carpeta de mods
  * - PUNTO 9:  usa http.js unificado (fetchJSON, download, friendlyError)
  * - PUNTO 12: directorio base separado del .minecraft oficial
  * - PUNTO 13: errores de red diferenciados
- * FIX 2:      mods descargados en parallel() en vez de for-loop síncrono
- * FIX 4:      hash SHA1 de mods usando streams (no readFileSync) → no bloquea hilo
+ * - FIX 2:    mods descargados en parallel() en vez de for-loop síncrono
+ * - FIX 4:    hash SHA1 de mods usando streams (no readFileSync)
+ * - FIX 5:    options.txt copiado desde .minecraft oficial de Mojang
+ *
+ * SECURITY FIXES:
+ * - SEC 2: path traversal en mod.name — cada ruta de mod se valida
+ *   contra modsDir antes de escribir. Si el servidor de modpacks es
+ *   comprometido, no puede escribir archivos fuera de la carpeta de mods.
+ * - SEC 3: hash SHA1 verificado TAMBIÉN post-descarga, no solo para
+ *   saltarse la descarga. Archivos con hash inválido son eliminados y
+ *   se reportan como error. Previene uso de mods manipulados en tránsito.
+ * - SEC 2b: mod.url validada — solo se descargan URLs https:// de hosts
+ *   conocidos. Previene SSRF o descarga de contenido arbitrario.
  */
 
 const fs     = require('fs')
@@ -15,46 +28,30 @@ const path   = require('path')
 const crypto = require('crypto')
 const os     = require('os')
 
-const config    = require('../utils/config')
-const installer = require('./installer')
+const config            = require('../utils/config')
+const installer         = require('./installer')
+const { installLoader } = require('./loaderInstaller')
 const { fetchJSON, download, friendlyError } = require('../utils/http')
 
-const MODPACKS_URL   = 'https://example.com/humita/modpacks.json'
-const CONCURRENCY_MODS = 4   // parallelismo conservador: los mods son grandes
+const MODPACKS_URL     = 'https://humitaclient.sytes.net/modpacks.json'
+const CONCURRENCY_MODS = 4
 
-// ─── Fallback ─────────────────────────────────────────────────
+// SEC 2b: lista de hosts permitidos para descarga de mods.
+// Ampliar según los CDNs que uses (e.g. modrinth, curseforge, tu propio servidor).
+const ALLOWED_MOD_HOSTS = new Set([
+  'humitaclient.sytes.net',
+  'cdn.modrinth.com',
+  'media.forgecdn.net',
+  'edge.forgecdn.net',
+])
+
 const FALLBACK_MODPACKS = {
-  modpacks: [
-    {
-      id:          'survival',
-      name:        'Survival SMP',
-      description: 'Servidor survival con mods de calidad de vida',
-      version:     '1.21.4',
-      serverIp:    'play.cubecraft.net',
-      logo:        '',
-      color:       '#27ae60',
-      background:  '',
-      mods:        [],
-    },
-    {
-      id:          'skyblock',
-      name:        'SkyBlock Plus',
-      description: 'SkyBlock con mecánicas personalizadas',
-      version:     '1.20.1',
-      serverIp:    'hypixel.net',
-      logo:        '',
-      color:       '#3498db',
-      background:  '',
-      mods:        [],
-    },
-  ],
+  modpacks: [],
 }
 
 // ─── Directorios de instancia ─────────────────────────────────
 
 function getBaseDir() {
-  // Windows: C:\Users\<user>\AppData\Roaming\.humita
-  // macOS/Linux: ~/.humita
   const base = os.platform() === 'win32'
     ? (process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'))
     : os.homedir()
@@ -69,11 +66,93 @@ function getModsDir(modpackId) {
   return path.join(getModpackDir(modpackId), 'mods')
 }
 
-// ─── FIX 4: SHA1 por stream — no carga el archivo en memoria ──
-/**
- * Calcula el SHA1 de un archivo usando streams.
- * Equivalente a sha1File() en installer.js, evita cargar JARs de 50MB en RAM.
- */
+// ─── Directorio .minecraft oficial de Mojang ──────────────────
+
+function getVanillaMinecraftDir() {
+  switch (os.platform()) {
+    case 'win32':
+      return path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), '.minecraft')
+    case 'darwin':
+      return path.join(os.homedir(), 'Library', 'Application Support', 'minecraft')
+    default:
+      return path.join(os.homedir(), '.minecraft')
+  }
+}
+
+// ─── options.txt global ───────────────────────────────────────
+//
+// Jerarquía de fuentes (se usa la primera que exista):
+//   1. ~/.humita/options.txt        — global del launcher (fuente de verdad)
+//   2. ~/.minecraft/options.txt     — Mojang oficial (fallback automático)
+//   3. Sin copiar                   — Minecraft usa sus defaults
+
+function getGlobalOptionsPath() {
+  return path.join(getBaseDir(), 'options.txt')
+}
+
+function resolveOptionsSource() {
+  const globalOptions = getGlobalOptionsPath()
+  if (fs.existsSync(globalOptions)) {
+    console.log('[modpacks] Usando options.txt global del launcher')
+    return globalOptions
+  }
+  const vanillaOptions = path.join(getVanillaMinecraftDir(), 'options.txt')
+  if (fs.existsSync(vanillaOptions)) {
+    console.log('[modpacks] Usando options.txt del .minecraft oficial (fallback)')
+    return vanillaOptions
+  }
+  console.warn('[modpacks] No hay options.txt disponible — Minecraft usará defaults')
+  return null
+}
+
+function applyOptionsToInstance(instanceDir) {
+  const source = resolveOptionsSource()
+  if (!source) return { copied: false, source: null }
+  try {
+    const dest = path.join(instanceDir, 'options.txt')
+    fs.copyFileSync(source, dest)
+    return { copied: true, source }
+  } catch (e) {
+    console.warn('[modpacks] Error copiando options.txt:', e.message)
+    return { copied: false, source }
+  }
+}
+
+function saveGlobalOptions(srcPath) {
+  const globalPath = getGlobalOptionsPath()
+  try {
+    if (typeof srcPath === 'string' && !srcPath.includes('\n') && fs.existsSync(srcPath)) {
+      fs.copyFileSync(srcPath, globalPath)
+    } else {
+      fs.writeFileSync(globalPath, srcPath, 'utf-8')
+    }
+    return { success: true, path: globalPath }
+  } catch (e) {
+    return { success: false, message: e.message }
+  }
+}
+
+function importOptionsFromInstance(modpackId) {
+  const instanceDir  = getModpackDir(modpackId)
+  const instanceOpts = path.join(instanceDir, 'options.txt')
+  if (!fs.existsSync(instanceOpts)) {
+    return { success: false, message: 'La instancia "' + modpackId + '" no tiene options.txt' }
+  }
+  return saveGlobalOptions(instanceOpts)
+}
+
+function getGlobalOptionsInfo() {
+  const globalPath = getGlobalOptionsPath()
+  const exists     = fs.existsSync(globalPath)
+  return {
+    exists,
+    path:     globalPath,
+    modified: exists ? fs.statSync(globalPath).mtime.toISOString() : null,
+  }
+}
+
+// ─── SHA1 por stream ──────────────────────────────────────────
+
 function sha1FileStream(filePath) {
   return new Promise((resolve, reject) => {
     const hash   = crypto.createHash('sha1')
@@ -84,13 +163,9 @@ function sha1FileStream(filePath) {
   })
 }
 
-/**
- * Verifica si un mod ya existe en disco y su hash coincide.
- * Usa streams para no bloquear el hilo principal con archivos grandes.
- */
 async function modFileOk(filePath, expectedSha1) {
   if (!fs.existsSync(filePath)) return false
-  if (!expectedSha1)            return true  // existe pero sin hash → ok
+  if (!expectedSha1)            return true
   try {
     return (await sha1FileStream(filePath)) === expectedSha1
   } catch {
@@ -98,8 +173,35 @@ async function modFileOk(filePath, expectedSha1) {
   }
 }
 
+// ─── SEC 2: Validación de path traversal ─────────────────────
+// Verifica que destPath esté estrictamente dentro de baseDir.
+// Usa path.resolve para normalizar antes de comparar, de forma que
+// "../../../etc/passwd" u otras secuencias sean neutralizadas.
+
+function isPathSafe(baseDir, destPath) {
+  const resolvedBase = path.resolve(baseDir)
+  const resolvedDest = path.resolve(destPath)
+  // El separador al final de resolvedBase garantiza que un directorio
+  // "baseDir_evil" no sea aceptado como prefijo válido de "baseDir".
+  return resolvedDest.startsWith(resolvedBase + path.sep) ||
+         resolvedDest === resolvedBase
+}
+
+// ─── SEC 2b: Validación de URL de mod ────────────────────────
+// Solo permite URLs https:// de hosts en ALLOWED_MOD_HOSTS.
+
+function isModUrlAllowed(url) {
+  if (!url || typeof url !== 'string') return false
+  try {
+    const parsed = new URL(url)
+    if (parsed.protocol !== 'https:') return false
+    return ALLOWED_MOD_HOSTS.has(parsed.hostname)
+  } catch {
+    return false
+  }
+}
+
 // ─── parallel ─────────────────────────────────────────────────
-// Igual que en installer.js — descarga N mods concurrentemente.
 
 async function parallel(tasks, concurrency) {
   let index = 0
@@ -121,11 +223,36 @@ async function fetchModpacks() {
       throw new Error('Formato inválido')
     }
 
+    const remoteIds = new Set(data.modpacks.map(mp => mp.id))
+
     const withStatus = data.modpacks.map(mp => ({
       ...mp,
       installed:   isInstalled(mp.id),
       instanceDir: getModpackDir(mp.id),
     }))
+
+    // Agregar instancias instaladas localmente que ya no están en el servidor
+    // (por ejemplo, modpacks recién añadidos al launcher antes de que el
+    // servidor los publique, o packs eliminados remotamente pero conservados
+    // localmente).
+    const localInstalled = config.get('installedModpacks') || {}
+    for (const [id, info] of Object.entries(localInstalled)) {
+      if (remoteIds.has(id)) continue   // ya viene del servidor, no duplicar
+      withStatus.push({
+        id,
+        name:        info.name        || id,
+        version:     info.version     || '?',
+        description: info.description || '',
+        serverIp:    info.serverIp    || '',
+        loader:      info.loaderType
+          ? { type: info.loaderType, version: info.loaderVersion }
+          : null,
+        mods:        [],
+        installed:   true,
+        instanceDir: getModpackDir(id),
+        _localOnly:  true,   // flag informativo para la UI si lo necesita
+      })
+    }
 
     return { success: true, modpacks: withStatus }
 
@@ -137,11 +264,33 @@ async function fetchModpacks() {
 
     console.warn('[modpacks] Usando fallback. Motivo:', reason)
 
+    const fallbackIds = new Set(FALLBACK_MODPACKS.modpacks.map(mp => mp.id))
+
     const withStatus = FALLBACK_MODPACKS.modpacks.map(mp => ({
       ...mp,
       installed:   isInstalled(mp.id),
       instanceDir: getModpackDir(mp.id),
     }))
+
+    // En modo offline también mostrar las instancias instaladas localmente
+    const localInstalled = config.get('installedModpacks') || {}
+    for (const [id, info] of Object.entries(localInstalled)) {
+      if (fallbackIds.has(id)) continue
+      withStatus.push({
+        id,
+        name:        info.name        || id,
+        version:     info.version     || '?',
+        description: info.description || '',
+        serverIp:    info.serverIp    || '',
+        loader:      info.loaderType
+          ? { type: info.loaderType, version: info.loaderVersion }
+          : null,
+        mods:        [],
+        installed:   true,
+        instanceDir: getModpackDir(id),
+        _localOnly:  true,
+      })
+    }
 
     return {
       success:       true,
@@ -159,16 +308,41 @@ async function installModpack(modpackId, modpackData, onProgress) {
     fs.mkdirSync(instanceDir, { recursive: true })
     fs.mkdirSync(modsDir,     { recursive: true })
 
-    // 1. Instalar Minecraft base
+    const hasLoader = !!(modpackData.loader?.type && modpackData.loader?.version)
+
+    // ── PASO 1: Instalar Minecraft vanilla base ────────────────
     onProgress({ message: `Instalando Minecraft ${modpackData.version}...`, percent: 5 })
 
     const installRes = await installer.install(modpackData.version, (p) => {
-      onProgress({ message: p.message, percent: Math.floor(p.percent * 0.7) })
+      const scale = hasLoader ? 0.50 : 0.65
+      onProgress({ message: p.message, percent: 5 + Math.floor(p.percent * scale) })
     })
 
     if (!installRes.success) return installRes
 
-    // 2. Descargar mods en parallel con hash por stream
+    // ── PASO 2: Instalar loader (Fabric o Forge) si corresponde ─
+    let launchVersionId = modpackData.version
+
+    if (hasLoader) {
+      onProgress({
+        message: `Instalando ${modpackData.loader.type} ${modpackData.loader.version}...`,
+        percent: 57,
+      })
+
+      const loaderRes = await installLoader(
+        modpackData.loader,
+        modpackData.version,
+        (p) => onProgress({ message: p.message, percent: 57 + Math.floor((p.percent / 100) * 13) }),
+        0,
+      )
+
+      if (!loaderRes.success) return loaderRes
+
+      launchVersionId = loaderRes.versionId
+      onProgress({ message: `${modpackData.loader.type} ${modpackData.loader.version} listo ✓`, percent: 70 })
+    }
+
+    // ── PASO 3: Descargar mods ─────────────────────────────────
     const mods = modpackData.mods || []
 
     if (mods.length > 0) {
@@ -178,51 +352,120 @@ async function installModpack(modpackId, modpackData, onProgress) {
       let modsSkipped = 0
       const modErrors = []
 
-      // FIX 2 + FIX 4: parallel() + sha1FileStream en vez de for-loop síncrono
-      await parallel(mods.map((mod, i) => async () => {
-        const modPath = path.join(modsDir, mod.name + '.jar')
+      await parallel(mods.map((mod) => async () => {
+        modsDone++
 
-        // FIX 4: verificación con stream — no carga el .jar en RAM
+        // SEC 2: construir la ruta destino y validarla contra modsDir
+        // ANTES de cualquier operación de disco.
+        const rawModPath = path.join(modsDir, mod.name + '.jar')
+
+        if (!isPathSafe(modsDir, rawModPath)) {
+          const msg = `Path traversal bloqueado en mod "${mod.name}"`
+          console.error(`[modpacks] SEC: ${msg}`)
+          modErrors.push({ name: mod.name, error: msg })
+          return
+        }
+
+        const modPath = rawModPath
+
+        // SEC 2b: validar URL del mod antes de descargar
+        if (!isModUrlAllowed(mod.url)) {
+          const msg = `URL de mod no permitida: "${mod.url}"`
+          console.error(`[modpacks] SEC: ${msg}`)
+          modErrors.push({ name: mod.name, error: msg })
+          return
+        }
+
+        // Verificar si el archivo ya existe y tiene hash correcto
         if (await modFileOk(modPath, mod.sha1)) {
           modsSkipped++
           onProgress({
-            message: `Mod ${modsDone + 1}/${mods.length}: ${mod.name} (ya existe ✓)`,
+            message: `Mod ${modsDone}/${mods.length}: ${mod.name} (ya existe ✓)`,
             percent: 70 + Math.floor((modsDone / mods.length) * 25),
           })
-        } else {
-          try {
-            await download(mod.url, modPath)
-          } catch (err) {
-            const friendly = friendlyError(err)
-            modErrors.push({ name: mod.name, error: friendly })
-            console.warn(`[modpacks] Fallo descargando ${mod.name}: ${friendly}`)
-          }
-
-          onProgress({
-            message: `Mod ${modsDone + 1}/${mods.length}: ${mod.name}`,
-            percent: 70 + Math.floor(((modsDone + 1) / mods.length) * 25),
-          })
+          return
         }
 
-        modsDone++
+        // Descargar el mod
+        try {
+          await download(mod.url, modPath)
+        } catch (err) {
+          const friendly = friendlyError(err)
+          modErrors.push({ name: mod.name, error: friendly })
+          console.warn(`[modpacks] Fallo descargando ${mod.name}: ${friendly}`)
+          // Si el archivo quedó a medias, eliminarlo
+          try { if (fs.existsSync(modPath)) fs.unlinkSync(modPath) } catch { /* ignorar */ }
+          onProgress({
+            message: `Mod ${modsDone}/${mods.length}: ${mod.name} ✗`,
+            percent: 70 + Math.floor((modsDone / mods.length) * 25),
+          })
+          return
+        }
+
+        // SEC 3: verificar hash SHA1 DESPUÉS de la descarga.
+        // Si no coincide, el archivo se elimina y se reporta el error.
+        // Esto detecta tanto corrupción de red como manipulación en tránsito.
+        if (mod.sha1) {
+          const downloadedHashOk = await modFileOk(modPath, mod.sha1)
+          if (!downloadedHashOk) {
+            const msg = `Hash SHA1 inválido post-descarga`
+            console.error(`[modpacks] SEC: ${mod.name} — ${msg}. Esperado: ${mod.sha1}`)
+            modErrors.push({ name: mod.name, error: msg })
+            try { fs.unlinkSync(modPath) } catch { /* ignorar */ }
+            onProgress({
+              message: `Mod ${modsDone}/${mods.length}: ${mod.name} ✗ (hash inválido)`,
+              percent: 70 + Math.floor((modsDone / mods.length) * 25),
+            })
+            return
+          }
+        }
+
+        onProgress({
+          message: `Mod ${modsDone}/${mods.length}: ${mod.name} ✓`,
+          percent: 70 + Math.floor((modsDone / mods.length) * 25),
+        })
       }), CONCURRENCY_MODS)
 
       if (modErrors.length > 0) {
         console.warn('[modpacks] Mods con errores:', modErrors)
+        const okCount = mods.length - modErrors.length
+        onProgress({
+          message: `⚠ ${modErrors.length} mod(s) no se descargaron. ${okCount} ok, ${modsSkipped} ya existían.`,
+          percent: 95,
+        })
+      } else {
+        const downloaded = mods.length - modsSkipped
+        const parts = []
+        if (downloaded > 0) parts.push(`${downloaded} descargado(s)`)
+        if (modsSkipped  > 0) parts.push(`${modsSkipped} ya existían`)
+        onProgress({
+          message: `Mods listos ✓  (${parts.join(', ')})`,
+          percent: 95,
+        })
       }
     }
 
-    // 3. Guardar IP
-    config.set('lastServerIp', modpackData.serverIp)
+    // ── PASO 4: Aplicar options.txt global ───────────────────
+    // Usa la jerarquía: global del launcher → .minecraft oficial → sin copiar
+    const optResult = applyOptionsToInstance(instanceDir)
+    if (optResult.copied) {
+      const srcLabel = optResult.source === getGlobalOptionsPath()
+        ? 'configuración global ✓'
+        : 'configuración de .minecraft oficial ✓'
+      onProgress({ message: `Opciones aplicadas desde ${srcLabel}`, percent: 98 })
+    }
 
-    // 4. Marcar como instalado
-    markInstalled(modpackId, modpackData)
+    // ── PASO 5: Guardar estado ─────────────────────────────────
+    config.set('lastServerIp', modpackData.serverIp)
+    markInstalled(modpackId, modpackData, launchVersionId)
+
     onProgress({ message: `¡${modpackData.name} instalado!`, percent: 100 })
 
     return {
-      success:     true,
-      message:     `${modpackData.name} instalado correctamente.`,
+      success:        true,
+      message:        `${modpackData.name} instalado correctamente.`,
       instanceDir,
+      launchVersionId,
     }
 
   } catch (err) {
@@ -237,13 +480,18 @@ function isInstalled(modpackId) {
   return Boolean(installed[modpackId])
 }
 
-function markInstalled(modpackId, modpackData) {
+function markInstalled(modpackId, modpackData, launchVersionId) {
   const installed = config.get('installedModpacks') || {}
   installed[modpackId] = {
-    version:     modpackData.version,
-    serverIp:    modpackData.serverIp,
-    instanceDir: getModpackDir(modpackId),
-    installedAt: new Date().toISOString(),
+    name:            modpackData.name        || modpackId,
+    description:     modpackData.description || '',
+    version:         modpackData.version,
+    loaderType:      modpackData.loader?.type    || null,
+    loaderVersion:   modpackData.loader?.version || null,
+    launchVersionId,
+    serverIp:        modpackData.serverIp,
+    instanceDir:     getModpackDir(modpackId),
+    installedAt:     new Date().toISOString(),
   }
   config.set('installedModpacks', installed)
 }
@@ -253,4 +501,16 @@ function getInstalledInfo(modpackId) {
   return installed[modpackId] || null
 }
 
-module.exports = { fetchModpacks, installModpack, isInstalled, getInstalledInfo, getModpackDir }
+module.exports = {
+  fetchModpacks,
+  installModpack,
+  isInstalled,
+  getInstalledInfo,
+  getModpackDir,
+  // options.txt global
+  getGlobalOptionsPath,
+  getGlobalOptionsInfo,
+  saveGlobalOptions,
+  importOptionsFromInstance,
+  applyOptionsToInstance,
+}

@@ -1,9 +1,16 @@
 /**
  * core/auth.js
- * CAMBIOS:
+ * CAMBIOS ORIGINALES:
  * - PUNTO 4:  tokens guardados en keychain vía config.saveTokens/getTokens
  * - PUNTO 9:  usa http.js unificado en vez de su propio helper
  * - PUNTO 13: errores de red diferenciados con friendlyError
+ *
+ * SECURITY FIX:
+ * - SEC 4: authCode validado con regex antes de enviarlo a Microsoft.
+ *   Un code malformado no llega al endpoint OAuth — falla rápido y limpio
+ *   sin exponer datos en logs de red. El formato OAuth 2.0 acepta
+ *   caracteres alfanuméricos, guiones, puntos, tildes y guiones bajos
+ *   (RFC 6749 §4.1.2 — "code" es un "code" value con chars sin reservar).
  */
 
 const crypto = require('crypto')
@@ -27,9 +34,19 @@ const URLS = {
   mcOwned:   'https://api.minecraftservices.com/entitlements/mcstore',
 }
 
+// SEC 4: regex de validación del authorization code.
+// RFC 6749 §4.1.2 — el code es un string de chars "unreserved" de la URI.
+// Longitud máxima de 2048 cubre todos los proveedores conocidos con margen.
+const AUTH_CODE_REGEX = /^[A-Za-z0-9\-._~!$&'()*+,;=:@%]+$/
+const AUTH_CODE_MAX_LENGTH = 2048
+
+function validateAuthCode(code) {
+  if (!code || typeof code !== 'string') return false
+  if (code.length > AUTH_CODE_MAX_LENGTH) return false
+  return AUTH_CODE_REGEX.test(code)
+}
+
 // ─── HTTP helper (POST/GET con body) ──────────────────────────
-// fetchJSON solo hace GET. Para los POST del flujo OAuth usamos
-// este helper interno mínimo (no duplica lógica de download/assets).
 
 const https = require('https')
 const http  = require('http')
@@ -138,19 +155,30 @@ function openMicrosoftLogin() {
               win.destroy()
               reject(new Error(`${error}: ${desc}`))
             } else if (code) {
+              // SEC 4: validar el formato del code antes de usarlo.
+              // Si no cumple el formato RFC 6749, rechazar inmediatamente
+              // sin llegar a hacer ninguna petición de red con el valor.
+              if (!validateAuthCode(code)) {
+                win.destroy()
+                reject(new Error('Código de autorización con formato inválido. Intenta de nuevo.'))
+                return true
+              }
+
               win.destroy()
               resolve(code)
             }
           }
           return true
         }
-      } catch {}
+      } catch (e) {
+        console.error(e)
+      }
       return false
     }
 
-    win.webContents.on('will-redirect',      (e, url) => { if (checkUrl(url)) e.preventDefault() })
-    win.webContents.on('will-navigate',      (e, url) => { if (checkUrl(url)) e.preventDefault() })
-    win.webContents.on('did-navigate',       (_, url) => checkUrl(url))
+    win.webContents.on('will-redirect',        (e, url) => { if (checkUrl(url)) e.preventDefault() })
+    win.webContents.on('will-navigate',        (e, url) => { if (checkUrl(url)) e.preventDefault() })
+    win.webContents.on('did-navigate',         (_, url) => checkUrl(url))
     win.webContents.on('did-navigate-in-page', (_, url) => checkUrl(url))
 
     win.on('closed', () => {
@@ -221,7 +249,7 @@ async function checkMinecraftOwnership(mcAccessToken) {
     const res = await request(URLS.mcOwned, { headers: { Authorization: `Bearer ${mcAccessToken}` } })
     return res.items && res.items.some(i => i.name === 'product_minecraft' || i.name === 'game_minecraft')
   } catch {
-    return true // Game Pass u otros casos donde el check falla
+    return true
   }
 }
 
@@ -246,9 +274,7 @@ async function loginMicrosoft() {
 
     const profile = await getMinecraftProfile(mcAccessToken)
 
-    // PUNTO 4: tokens van al keychain, NO a config.json
     await config.saveTokens({ accessToken: mcAccessToken, refreshToken: msRefreshToken })
-
     config.setAuthMeta({ username: profile.name, uuid: profile.id, authType: 'microsoft' })
 
     return { success: true, username: profile.name, uuid: profile.id }
@@ -257,7 +283,6 @@ async function loginMicrosoft() {
     let message = err.message || 'Error desconocido'
     console.error('[auth] Microsoft login error:', message)
 
-    // Códigos de error XSTS
     if (message.includes('2148916233')) message = 'Esta cuenta no tiene Xbox. Crea una en xbox.com primero.'
     if (message.includes('2148916235')) message = 'Xbox Live no está disponible en tu país.'
     if (message.includes('2148916236') || message.includes('2148916237'))
@@ -275,7 +300,6 @@ async function refreshSession() {
   }
 
   try {
-    // PUNTO 4: tokens se leen desde keychain
     const { refreshToken } = await config.getTokens()
     if (!refreshToken) return { success: true }
 
@@ -292,7 +316,6 @@ async function refreshSession() {
     return { success: true }
   } catch (err) {
     console.error('[auth] Refresh error:', err.message)
-    // PUNTO 13: error diferenciado
     return { success: false, message: friendlyError(err) }
   }
 }

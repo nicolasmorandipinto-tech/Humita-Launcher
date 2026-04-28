@@ -117,7 +117,9 @@ function download(url, dest, onProgress, timeoutMs = 20000) {
 
     const cleanup = (err) => {
       file.destroy()
-      try { fs.unlinkSync(tmp) } catch {}
+      try { fs.unlinkSync(tmp) } catch (e) {
+            console.error(e)
+}
       reject(err)
     }
 
@@ -125,7 +127,9 @@ function download(url, dest, onProgress, timeoutMs = 20000) {
       // Redirecciones
       if (res.statusCode === 301 || res.statusCode === 302) {
         file.destroy()
-        try { fs.unlinkSync(tmp) } catch {}
+        try { fs.unlinkSync(tmp) } catch (e) {
+            console.error(e)
+}
         return download(res.headers.location, dest, onProgress, timeoutMs)
           .then(resolve).catch(reject)
       }

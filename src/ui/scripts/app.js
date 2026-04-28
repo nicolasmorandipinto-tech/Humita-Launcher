@@ -32,8 +32,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     const version = await window.api.app.version()
     const el = document.getElementById('appVersion')
     if (el) el.textContent = `v${version}`
-  } catch {}
-
+  } catch (e) {
+      console.error(e)
+}
   const cfg = await window.api.config.getAll()
   if (cfg.username) {
     await loadUserState(cfg)
@@ -151,16 +152,16 @@ function setupLoginScreen() {
       if (olCounter) olCounter.textContent = olInput.value.length
 
       // Nombre en tiempo real
-      if (olNameDisplay) olNameDisplay.textContent = val || 'Steve'
+      if (olNameDisplay) olNameDisplay.textContent = val || 'Unnamed'
 
-      // Skin — debounce 600ms para no saturar cravatar
+      // Skin — debounce 100ms para no saturar cravatar
       clearTimeout(_skinDebounce)
       _skinDebounce = setTimeout(() => {
         if (olSkinImg) {
           const name = val || 'steve'
           olSkinImg.src = `https://cravatar.eu/head/${encodeURIComponent(name)}/128`
         }
-      }, 600)
+      }, 100)
     })
   }
 
@@ -201,11 +202,13 @@ function setupApp() {
   setupUserPopup()
   setupSettings()
   setupPlayZone()
+  setupNewInstance()
   loadModpacks()
 }
 
 // ─── User Profile Page ────────────────────────────────────────
 function setupUserPopup() {
+  setupInstancesDropdown()
   const chip = document.getElementById('userChip')
   chip.addEventListener('click', e => {
     e.stopPropagation()
@@ -236,6 +239,15 @@ function setupUserPopup() {
     }
     if (btnOffline) btnOffline.disabled = false
 
+    // BUG FIX (ventanas múltiples): solo resetear _appReady para que
+    // setupApp() vuelva a ejecutarse en el próximo login (carga modpacks,
+    // registra listeners de la app principal, etc.).
+    // NO resetear _loginScreenReady ni volver a llamar setupLoginScreen():
+    // los botones del login ya tienen sus listeners del primer arranque —
+    // volver a registrarlos acumula duplicados y causa que se abran N
+    // ventanas de Microsoft tras N ciclos de login/logout.
+    _appReady = false
+
     showLoginScreen()
   })
 
@@ -247,8 +259,10 @@ function setupUserPopup() {
     const javaPath = await window.api.java.find()
     if (javaPath) {
       document.getElementById('profileJavaPath').value = javaPath
+      // Guardar inmediatamente — antes solo llenaba el input sin persistir
+      await window.api.config.set('javaPath', javaPath)
       const version = await window.api.java.getVersion(javaPath)
-      note.textContent = `Java ${version} ✓`
+      note.textContent = `Java ${version} detectado y guardado ✓`
       note.style.color = 'var(--success)'
     } else {
       note.textContent = 'Java no encontrado. Descárgalo desde adoptium.net'
@@ -266,10 +280,23 @@ function setupUserPopup() {
   })
 
   document.getElementById('profileSaveRam').addEventListener('click', async () => {
-    await window.api.config.set('ramMin', document.getElementById('profileRamMin').value.trim())
-    await window.api.config.set('ramMax', document.getElementById('profileRamMax').value.trim())
+    const mb  = parseInt(document.getElementById('profileRamMax').value)
+    const str = mb >= 1024 ? (mb / 1024) + 'G' : mb + 'M'
+    await window.api.config.set('ramMin', '512M')
+    await window.api.config.set('ramMax', str)
     flashProfileSaved('profileSaveRam')
   })
+
+  // Actualizar etiqueta al mover slider
+  const ramSlider = document.getElementById('profileRamMax')
+  const ramValEl  = document.getElementById('profileRamMaxVal')
+  if (ramSlider) {
+    ramSlider.addEventListener('input', () => {
+      const mb = parseInt(ramSlider.value)
+      if (ramValEl) ramValEl.textContent = mb >= 1024 ? (mb / 1024) + 'G' : mb + 'M'
+      updateRamSliderFill(ramSlider)
+    })
+  }
 
   document.getElementById('profileSaveMcDir').addEventListener('click', async () => {
     await window.api.config.set('minecraftDir', document.getElementById('profileMcDir').value.trim())
@@ -283,6 +310,150 @@ function flashProfileSaved(btnId) {
   const orig = btn.textContent
   btn.textContent = '✓'
   setTimeout(() => { btn.textContent = orig }, 1500)
+}
+
+function updateRamSliderFill(slider) {
+  const min = parseInt(slider.min)
+  const max = parseInt(slider.max)
+  const val = parseInt(slider.value)
+  const pct = ((val - min) / (max - min)) * 100
+  slider.style.background = `linear-gradient(to right, var(--accent) ${pct}%, rgba(255,255,255,0.1) ${pct}%)`
+}
+
+// ─── Gestión de instancias ────────────────────────────────────
+
+function setupInstancesDropdown() {
+  const toggleBtn  = document.getElementById('instancesToggleBtn')
+  const list       = document.getElementById('instancesList')
+  if (!toggleBtn || !list) return
+
+  toggleBtn.addEventListener('click', () => {
+    const isOpen = list.style.display !== 'none'
+    if (isOpen) {
+      list.style.display = 'none'
+      toggleBtn.classList.remove('open')
+    } else {
+      renderInstancesList()
+      list.style.display = 'flex'
+      toggleBtn.classList.add('open')
+    }
+  })
+}
+
+function renderInstancesList() {
+  const list = document.getElementById('instancesList')
+  if (!list) return
+
+  window.api.config.getAll().then(cfg => {
+    const installed = cfg.installedModpacks || {}
+    const ids = Object.keys(installed)
+
+    if (ids.length === 0) {
+      list.innerHTML = '<div class="profile-instances-empty">No hay instancias instaladas.</div>'
+      return
+    }
+
+    list.innerHTML = ''
+    ids.forEach(id => {
+      const info = installed[id]
+      const row  = document.createElement('div')
+      row.className = 'profile-instance-row'
+
+      // Icono / logo
+      const icon = document.createElement('div')
+      icon.className = 'profile-instance-icon'
+      if (info.logo) {
+        const img = document.createElement('img')
+        img.src = info.logo
+        img.onerror = () => { icon.textContent = (info.name || id).charAt(0).toUpperCase() }
+        icon.appendChild(img)
+      } else {
+        icon.textContent = (info.name || id).charAt(0).toUpperCase()
+      }
+
+      // Info
+      const infoEl = document.createElement('div')
+      infoEl.className = 'profile-instance-info'
+
+      const nameEl = document.createElement('div')
+      nameEl.className = 'profile-instance-name'
+      nameEl.textContent = info.name || id
+
+      const metaEl = document.createElement('div')
+      metaEl.className = 'profile-instance-meta'
+      const loaderStr = info.loaderType ? `  ·  ${info.loaderType} ${info.loaderVersion || ''}` : ''
+      metaEl.textContent = `MC ${info.version || '?'}${loaderStr}`
+
+      infoEl.appendChild(nameEl)
+      infoEl.appendChild(metaEl)
+
+      // Acciones
+      const actions = document.createElement('div')
+      actions.className = 'profile-instance-actions'
+
+      // Botón Renombrar
+      const renameBtn = document.createElement('button')
+      renameBtn.className = 'profile-instance-btn'
+      renameBtn.textContent = 'Renombrar'
+      renameBtn.addEventListener('click', () => showRenameInstance(id, info.name || id))
+
+      // Botón Eliminar
+      const deleteBtn = document.createElement('button')
+      deleteBtn.className = 'profile-instance-btn danger'
+      deleteBtn.textContent = 'Eliminar'
+      deleteBtn.addEventListener('click', () => showDeleteInstance(id, info.name || id))
+
+      actions.appendChild(renameBtn)
+      actions.appendChild(deleteBtn)
+
+      row.appendChild(icon)
+      row.appendChild(infoEl)
+      row.appendChild(actions)
+      list.appendChild(row)
+    })
+  })
+}
+
+function showRenameInstance(id, currentName) {
+  const newName = window.prompt(`Nuevo nombre para "${currentName}":`, currentName)
+  if (!newName || !newName.trim() || newName.trim() === currentName) return
+  // Usar el canal IPC dedicado que agrega main.js
+  window.api.modpacks.renameInstance(id, newName.trim()).then(() => {
+    renderInstancesList()
+    loadModpacks()
+  })
+}
+
+function showDeleteInstance(id, name) {
+  // Modal de confirmación (window.confirm está bloqueado en Electron con sandbox)
+  const overlay = document.createElement('div')
+  overlay.className = 'ni-confirm-delete-overlay'
+  overlay.innerHTML = `
+    <div class="ni-confirm-delete-box">
+      <div class="ni-confirm-delete-title">Eliminar instancia</div>
+      <div class="ni-confirm-delete-msg">
+        ¿Seguro que quieres eliminar <strong>${name}</strong>?<br>
+        Los archivos del juego no se borran del disco.
+      </div>
+      <div class="ni-confirm-delete-btns">
+        <button class="ni-confirm-delete-cancel">Cancelar</button>
+        <button class="ni-confirm-delete-ok">Eliminar</button>
+      </div>
+    </div>
+  `
+  document.body.appendChild(overlay)
+
+  overlay.querySelector('.ni-confirm-delete-cancel').addEventListener('click', () => overlay.remove())
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove() })
+
+  overlay.querySelector('.ni-confirm-delete-ok').addEventListener('click', () => {
+    overlay.remove()
+    window.api.modpacks.deleteInstance(id).then(() => {
+      renderInstancesList()
+      loadModpacks()
+      if (state.currentModpackId === id) state.currentModpackId = null
+    })
+  })
 }
 
 function openProfilePage() {
@@ -309,17 +480,42 @@ function openProfilePage() {
   const bgEl = document.getElementById('profilePageBgBlur')
   const modpackBg = document.getElementById('modpack-bg')
   if (bgEl && modpackBg) {
+    // Leer la custom property que usa el ::before para el crossfade
     const mpUrl = modpackBg.style.getPropertyValue('--modpack-bg-url')
-    bgEl.style.backgroundImage = mpUrl || ''
+    bgEl.style.backgroundImage = mpUrl || 'url(../../../assets/background-2.jpg)'
   }
 
   // Cargar valores de config actuales en los campos
-  window.api.config.getAll().then(cfg => {
+  window.api.config.getAll().then(async cfg => {
     const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = val || '' }
     set('profileJavaPath', cfg.javaPath)
-    set('profileRamMin',   cfg.ramMin   || '1G')
-    set('profileRamMax',   cfg.ramMax   || '2G')
     set('profileMcDir',    cfg.minecraftDir)
+
+    // Detectar RAM total del equipo para el máximo del slider
+    const toMb = str => {
+      if (!str) return 2048
+      str = str.trim().toUpperCase()
+      if (str.endsWith('G')) return parseFloat(str) * 1024
+      if (str.endsWith('M')) return parseFloat(str)
+      return 2048
+    }
+    const toLabel = mb => mb >= 1024 ? (mb / 1024) + 'G' : mb + 'M'
+
+    let totalMb = 8192
+    try { totalMb = await (window.api.system?.ramMb?.() ?? 8192) } catch {}
+
+    const slider  = document.getElementById('profileRamMax')
+    const valEl   = document.getElementById('profileRamMaxVal')
+    const noteEl  = document.getElementById('profileRamNote')
+    const savedMb = toMb(cfg.ramMax || '2G')
+
+    if (slider) {
+      slider.max   = totalMb
+      slider.value = Math.min(savedMb, totalMb)
+      updateRamSliderFill(slider)
+    }
+    if (valEl)  valEl.textContent  = toLabel(Math.min(savedMb, totalMb))
+    if (noteEl) noteEl.textContent = `máximo disponible: ${toLabel(totalMb)}`
   })
 
   // Mostrar la página de perfil, ocultar la de modpack
@@ -331,12 +527,171 @@ function openProfilePage() {
   // Quitar el fondo del modpack al entrar al perfil
   const modpackBgEl = document.getElementById('modpack-bg')
   if (modpackBgEl) modpackBgEl.classList.add('dimmed')
+
+  // Si el dropdown de instancias estaba abierto, refrescar su contenido
+  const instancesList = document.getElementById('instancesList')
+  if (instancesList && instancesList.style.display !== 'none') {
+    renderInstancesList()
+  }
 }
 
 function closeProfPage() {
   document.getElementById('userChip').classList.remove('chip-active')
   const modpackBgEl = document.getElementById('modpack-bg')
   if (modpackBgEl) modpackBgEl.classList.remove('dimmed')
+}
+
+// ─── Nueva Instancia ──────────────────────────────────────────
+function setupNewInstance() {
+  const openBtn    = document.getElementById('addInstanceBtn')
+  const modal      = document.getElementById('newInstanceModal')
+  const closeBtn   = document.getElementById('closeNewInstanceBtn')
+  const cancelBtn  = document.getElementById('cancelNewInstanceBtn')
+  const confirmBtn = document.getElementById('confirmNewInstanceBtn')
+  const nameInput  = document.getElementById('niName')
+  const versionSel = document.getElementById('niVersion')
+  const snapCheck  = document.getElementById('niSnapshots')
+  const logoPicker    = document.getElementById('niLogoPicker')
+  const logoInput     = document.getElementById('niLogoInput')
+  const logoPreview   = document.getElementById('niLogoPreview')
+  const logoPlaceholder = document.getElementById('niLogoPlaceholder')
+
+  let _customLogoDataUrl = null
+
+  // Abrir file picker al clickear el logo
+  logoPicker?.addEventListener('click', () => logoInput?.click())
+
+  logoInput?.addEventListener('change', () => {
+    const file = logoInput.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = e => {
+      _customLogoDataUrl = e.target.result
+      logoPreview.src = _customLogoDataUrl
+      logoPreview.style.display = 'block'
+      logoPlaceholder.style.display = 'none'
+      logoPicker.classList.add('has-logo')
+    }
+    reader.readAsDataURL(file)
+    // Resetear input para permitir seleccionar el mismo archivo de nuevo
+    logoInput.value = ''
+  })
+
+  async function loadVersions() {
+    versionSel.innerHTML = '<option value="">Cargando…</option>'
+    confirmBtn.disabled = true
+    try {
+      const raw = await window.api.versions.fetch(snapCheck.checked)
+      // versionManager devuelve { success, versions: [...], latest }
+      const versions = Array.isArray(raw) ? raw : (raw?.versions ?? [])
+
+      if (!versions.length) {
+        versionSel.innerHTML = '<option value="">Sin versiones disponibles</option>'
+        return
+      }
+
+      versionSel.innerHTML = ''
+
+      const installed = versions.filter(v => v.installed)
+      const pending   = versions.filter(v => !v.installed)
+
+      if (installed.length > 0) {
+        const grpInstalled = document.createElement('optgroup')
+        grpInstalled.label = '✓ Ya instaladas'
+        installed.forEach(v => {
+          const opt = document.createElement('option')
+          opt.value       = v.id
+          opt.textContent = `${v.id}  ✓`
+          grpInstalled.appendChild(opt)
+        })
+        versionSel.appendChild(grpInstalled)
+      }
+
+      if (pending.length > 0) {
+        const grpPending = document.createElement('optgroup')
+        grpPending.label = 'Disponibles'
+        pending.forEach(v => {
+          const opt = document.createElement('option')
+          opt.value       = v.id
+          opt.textContent = v.id
+          grpPending.appendChild(opt)
+        })
+        versionSel.appendChild(grpPending)
+      }
+
+      confirmBtn.disabled = false
+    } catch (err) {
+      console.error('[loadVersions]', err)
+      versionSel.innerHTML = `<option value="">Error: ${err.message}</option>`
+    }
+  }
+
+  function openModal() {
+    modal.style.display = 'flex'
+    void modal.offsetWidth           // reflow para activar transición CSS
+    modal.classList.add('show')
+    nameInput.value = ''
+    // Resetear logo al abrir
+    _customLogoDataUrl = null
+    if (logoPreview)     { logoPreview.src = ''; logoPreview.style.display = 'none' }
+    if (logoPlaceholder) logoPlaceholder.style.display = 'flex'
+    if (logoPicker)      logoPicker.classList.remove('has-logo')
+    setTimeout(() => nameInput.focus(), 350)
+    loadVersions()
+  }
+
+  function closeModal() {
+    modal.classList.remove('show')
+    setTimeout(() => { modal.style.display = 'none' }, 400)
+  }
+
+  openBtn.addEventListener('click', openModal)
+  closeBtn.addEventListener('click', closeModal)
+  cancelBtn.addEventListener('click', closeModal)
+  modal.addEventListener('click', e => { if (e.target === modal) closeModal() })
+  snapCheck.addEventListener('change', loadVersions)
+
+  confirmBtn.addEventListener('click', async () => {
+    const name    = nameInput.value.trim()
+    const version = versionSel.value
+    if (!name || !version) return
+
+    confirmBtn.disabled = true
+    confirmBtn.textContent = 'Instalando…'
+
+    try {
+      // 1. Instalar el cliente vanilla de Minecraft
+      const res = await window.api.installer.install(version)
+      if (res?.success === false) throw new Error(res.message)
+
+      // 2. Registrar como modpack para que aparezca en el sidebar
+      const modpackId   = `custom-${version}-${Date.now()}`
+      const modpackData = {
+        id:          modpackId,
+        name,
+        version,
+        description: '',
+        serverIp:    '',
+        mods:        [],
+        loader:      null,
+        logo:        _customLogoDataUrl || null,
+      }
+      await window.api.modpacks.install(modpackId, modpackData)
+
+      closeModal()
+
+      // 3. Refrescar el sidebar
+      await loadModpacks()
+
+    } catch (err) {
+      confirmBtn.textContent = 'Error — reintentar'
+      confirmBtn.disabled = false
+      return
+    }
+
+    confirmBtn.textContent = 'Crear instancia'
+    confirmBtn.disabled = false
+  })
 }
 
 // ─── Settings modal ───────────────────────────────────────────
@@ -358,6 +713,8 @@ function setupSettings() {
   document.getElementById('settingsModal').addEventListener('click', function(e) {
     if (e.target === this) closeModal('settingsModal')
   })
+  // FIX 8: sin onclick inline en el HTML — el listener se registra aquí
+  document.getElementById('closeSettingsBtn')?.addEventListener('click', () => closeModal('settingsModal'))
 
   document.getElementById('detectJava').addEventListener('click', async () => {
     const note = document.getElementById('javaNote')
@@ -449,7 +806,7 @@ async function loadModpacks() {
   if (offlineNotice) {
     if (res.offline) {
       const reason = res.offlineReason ? ` (${res.offlineReason})` : ''
-      offlineNotice.textContent = `⚠ Sin conexión al servidor de modpacks — mostrando datos locales${reason}`
+      offlineNotice.textContent = `Sin conexión al servidor de modpacks — mostrando datos locales${reason}`
       offlineNotice.style.display = 'block'
     } else {
       offlineNotice.style.display = 'none'
@@ -519,6 +876,29 @@ function selectModpack(modpackId) {
   checkModpackVersionMismatch(mp)
 
   renderModpackPage(mp)
+  // Dentro de renderModpackPage(mp)
+const bgContainer = document.getElementById('modpack-bg');
+const videoEl = document.getElementById('modpack-video');
+
+// Limpiar estados anteriores
+videoEl.classList.remove('active');
+bgContainer.classList.remove('has-modpack-bg');
+
+if (mp.background) {
+  // Verificamos si la URL de tu servidor termina en .webm
+  if (mp.background.toLowerCase().endsWith('.webm')) {
+    videoEl.src = mp.background;
+    videoEl.classList.add('active');
+    videoEl.play().catch(err => console.warn("Video play error:", err));
+  } else {
+    // Fallback por si pones una imagen
+    videoEl.src = "";
+    bgContainer.style.setProperty('--modpack-bg-url', `url('${mp.background}')`);
+    bgContainer.classList.add('has-modpack-bg');
+  }
+} else {
+  videoEl.src = "";
+}
 }
 
 // Avisa si el servidor tiene una versión diferente a la instalada localmente
@@ -534,24 +914,29 @@ async function checkModpackVersionMismatch(mp) {
         notice.style.display = 'block'
       }
     }
-  } catch {}
+  } catch (e) {
+      console.error(e)
+  }
 }
 
 // ─── Renderizar página del modpack ────────────────────────────
 function renderModpackPage(mp) {
   const hasInterrupted = state.interruptedInstalls.has(mp.id)
 
-  // FIX CSS injection: el fondo se aplica via custom property CSS, nunca
-  // interpolando datos del servidor directamente en backgroundImage.
-  // La custom property es asignada como texto; el CSS la consume en #modpack-bg.
+  // Fondo del modpack — crossfade via opacity en ::before (ver main.css).
+  // background-image no es animable en CSS, así que el ::before lleva
+  // la URL nueva con opacity 0→1 mientras el base mantiene el fallback.
+  // Así dos modpacks con backgrounds distintos siempre se diferencian.
   const bgEl = document.getElementById('modpack-bg')
   if (bgEl) {
     if (mp.background && /^https?:\/\//.test(mp.background)) {
       bgEl.style.setProperty('--modpack-bg-url', `url("${mp.background.replace(/"/g, '%22')}")`)
       bgEl.classList.add('has-modpack-bg')
     } else {
-      bgEl.style.removeProperty('--modpack-bg-url')
+      // Sin background propio: fade-out del ::before primero (remover clase),
+      // luego limpiar la propiedad tras la transición para no ver un salto.
       bgEl.classList.remove('has-modpack-bg')
+      setTimeout(() => bgEl.style.removeProperty('--modpack-bg-url'), 500)
     }
   }
 
@@ -701,34 +1086,57 @@ async function installModpack(mp) {
 async function launchGame(versionId, serverIp, modpackId) {
   if (state.isLaunching) return
   state.isLaunching = true
-  state.gameLog     = []  // limpiar log de sesión anterior
+  state.gameLog     = []
 
   const $            = id => document.getElementById(id)
-  const container    = $('playBtn')?.closest('.play-container')
+  const playBtn      = $('playBtn')
+  const container    = $('playContainer')   // el div.play-container directo
   const launchLabel  = $('playLaunchLabel')
   const progressBar  = $('launchProgressBar')
   const progressFill = $('launchProgressFill')
 
+  // Alinear barra al ancho exacto del botón PLAY
+  if (progressBar && playBtn) {
+    progressBar.style.width = playBtn.offsetWidth + 'px'
+  }
+
   if (container)    container.classList.add('is-launching')
-  if (launchLabel)  launchLabel.textContent = 'Lanzando'
+  if (playBtn)      playBtn.disabled = true
+  if (launchLabel)  launchLabel.textContent = 'Iniciando…'
   if (progressFill) progressFill.style.width = '0%'
-  if (progressBar)  { progressBar.offsetHeight; progressBar.classList.add('visible') }
+  if (progressBar)  { void progressBar.offsetHeight; progressBar.classList.add('visible') }
 
+  // Barra falsa: sube hasta 90% mientras arranca, se detiene ahí
   let pct = 5
+  let gameStarted = false
   const tick = setInterval(() => {
-    if (pct < 85) {
-      pct += Math.random() * 4
-      if (progressFill) progressFill.style.width = Math.min(pct, 85) + '%'
+    if (!gameStarted && pct < 90) {
+      pct += Math.random() * 7
+      if (progressFill) progressFill.style.width = Math.min(pct, 90) + '%'
     }
-  }, 500)
+  }, 350)
 
-  // Acumular log en memoria — disponible para el modal tras un crash
+  // Primera línea de log = proceso corriendo → completar y ocultar barra
   window.api.launcher.onLog(line => {
     state.gameLog.push(line)
-    if (!launchLabel) return
-    if (line.includes('Iniciando')) launchLabel.textContent = 'Lanzando'
-    if (line.includes('Loading'))   launchLabel.textContent = 'Cargando'
-    if (line.includes('AUTH'))      launchLabel.textContent = 'Verificando sesión'
+
+    if (!gameStarted) {
+      gameStarted = true
+      clearInterval(tick)
+      if (progressFill) progressFill.style.width = '100%'
+      setTimeout(() => {
+        if (progressBar)  progressBar.classList.remove('visible')
+        if (progressFill) progressFill.style.width = '0%'
+        if (launchLabel)  launchLabel.textContent = 'Jugando'
+        if (container)    container.classList.remove('is-launching')
+      }, 600)
+    }
+
+    // Actualizar label solo mientras está arrancando
+    if (!gameStarted) {
+      if (line.includes('AUTH'))      launchLabel && (launchLabel.textContent = 'Verificando…')
+      if (line.includes('Loading'))   launchLabel && (launchLabel.textContent = 'Cargando…')
+    }
   })
 
   let res = { success: false, message: 'Error inesperado al lanzar el juego.' }
@@ -737,23 +1145,29 @@ async function launchGame(versionId, serverIp, modpackId) {
     if (cfg.authType === 'microsoft') {
       await Promise.race([window.api.auth.refresh(), new Promise(r => setTimeout(r, 5000))])
     }
+    // launch() resuelve cuando Minecraft SE CIERRA, no cuando arranca
     res = await window.api.launcher.launch(versionId, serverIp, modpackId)
   } catch (err) {
     res = { success: false, message: err.message || 'Error inesperado.' }
   } finally {
     clearInterval(tick)
     state.isLaunching = false
-    if (progressFill) progressFill.style.width = '100%'
 
-    // Distinguir crash (código != 0) de cierre normal
-    const exitCode  = res.exitCode
-    const wasCrash  = !res.success || (exitCode !== undefined && exitCode !== 0)
+    // Restaurar UI al cerrar el juego
+    if (playBtn)      playBtn.disabled = false
+    if (container)    container.classList.remove('is-launching')
+    if (progressBar)  progressBar.classList.remove('visible')
+    if (progressFill) progressFill.style.width = '0%'
+    if (launchLabel)  launchLabel.textContent = 'Lanzando'
+
+    // Detectar crash vs cierre normal
+    const exitCode = res.exitCode
+    const wasCrash = !res.success || (exitCode !== undefined && exitCode !== 0)
 
     if (wasCrash) {
       const launchStatus = $('homeStatus')
       const launchText   = $('homeStatusText')
       if (launchStatus && launchText) {
-        // Mensaje diferenciado: crash vs. error de lanzamiento
         const msg = (!res.success && exitCode === undefined)
           ? `Error: ${res.message}`
           : `El juego se cerró inesperadamente (código ${exitCode ?? '?'}). Revisa el log.`
@@ -762,7 +1176,6 @@ async function launchGame(versionId, serverIp, modpackId) {
         launchText.textContent     = msg
         launchText.style.color     = 'var(--error)'
 
-        // Botón "Ver log" si hay líneas acumuladas
         let logBtn = launchStatus.querySelector('.view-log-btn')
         if (!logBtn && state.gameLog.length > 0) {
           logBtn             = document.createElement('button')
@@ -773,10 +1186,8 @@ async function launchGame(versionId, serverIp, modpackId) {
           launchStatus.appendChild(logBtn)
         }
 
-        // Persiste hasta click manual — nunca hay setTimeout que lo borre
         launchStatus.onclick = (e) => {
           if (e.target === launchStatus || e.target === launchText) {
-            // Limpiar
             const btn = launchStatus.querySelector('.view-log-btn')
             if (btn) btn.remove()
             launchStatus.style.display = 'none'
@@ -785,13 +1196,6 @@ async function launchGame(versionId, serverIp, modpackId) {
         }
       }
     }
-
-    setTimeout(() => {
-      if (container)    container.classList.remove('is-launching')
-      if (launchLabel)  launchLabel.textContent = 'Lanzando'
-      if (progressBar)  progressBar.classList.remove('visible')
-      if (progressFill) progressFill.style.width = '0%'
-    }, 1000)
   }
 }
 
@@ -808,13 +1212,14 @@ function showGameLogModal() {
       <div class="modal modal-log">
         <div class="modal-header">
           <h2>Log del juego</h2>
-          <button class="modal-close-btn"
-            onclick="document.getElementById('gameLogModal').style.display='none'">✕</button>
+          <button class="modal-close-btn" id="gameLogCloseBtn">✕</button>
         </div>
         <pre id="gameLogContent" class="game-log-pre"></pre>
       </div>
     `
     modal.addEventListener('click', e => { if (e.target === modal) modal.style.display = 'none' })
+    // FIX 8: sin onclick inline — el listener se adjunta al elemento creado
+    modal.querySelector('#gameLogCloseBtn').addEventListener('click', () => { modal.style.display = 'none' })
     document.body.appendChild(modal)
   }
 

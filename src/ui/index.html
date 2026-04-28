@@ -2,13 +2,21 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' https://cravatar.eu data:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' https://cravatar.eu https://humitaclient.sytes.net data:; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; media-src 'self' https://humitaclient.sytes.net;">
   <link href="https://fonts.googleapis.com/css2?family=Raleway:wght@800&display=swap" rel="stylesheet">
-  <title>Humita Launcher</title>
+  <title>Humita Client</title>
   <link rel="stylesheet" href="styles/main.css">
+  <style>
+    /* ── Barra de lanzamiento: mismo ancho que el botón play ── */
+    #launchProgressBar {
+      align-self: center;
+    }
+  </style>
 </head>
 <body>
-  <div id="modpack-bg"></div>
+  <div id="modpack-bg">
+    <video id="modpack-video" autoplay muted loop playsinline preload="auto"></video>
+  </div>
 
   <!-- ══════════════════════════════════════════
        PANTALLA DE CARGA INICIAL
@@ -30,7 +38,7 @@
           <img src="../../assets/icon.png" alt="Humita" class="login-logo-img">
           <div class="login-logo-text">
             <div class="login-logo">HUMITA</div>
-            <div class="login-logo-sub">Launcher</div>
+            <div class="login-logo-sub">Client</div>
           </div>
         </div>
         <div class="login-title">Bienvenido</div>
@@ -70,6 +78,12 @@
         </nav>
 
         <div class="sidebar-footer">
+          <button class="sidebar-add-btn" id="addInstanceBtn" title="Nueva instancia">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" xmlns="http://www.w3.org/2000/svg">
+              <line x1="12" y1="5" x2="12" y2="19"/>
+              <line x1="5" y1="12" x2="19" y2="12"/>
+            </svg>
+          </button>
           <div class="user-skin-btn" id="userChip" title="Cuenta">
             <img id="userSkin" src="https://cravatar.eu/avatar/steve" alt="Skin" class="user-avatar">
           </div>
@@ -115,18 +129,18 @@
                 <div class="profile-field-note" id="profileJavaNote"></div>
               </div>
 
-              <div class="profile-settings-card">
+              <div class="profile-settings-card" id="profileRamCard">
                 <div class="profile-settings-card-icon"></div>
                 <div class="profile-settings-card-body">
                   <div class="profile-settings-card-label">Memoria RAM</div>
-                  <div class="profile-ram-row">
-                    <span class="profile-ram-lbl">Mín</span>
-                    <input type="text" id="profileRamMin" class="profile-field-input profile-field-short" value="1G">
-                    <span class="profile-ram-lbl">Máx</span>
-                    <input type="text" id="profileRamMax" class="profile-field-input profile-field-short" value="2G">
-                    <button class="profile-pill-btn accent" id="profileSaveRam">Guardar</button>
+                  <div class="profile-ram-slider-wrap">
+                    <input type="range" id="profileRamMax" class="profile-ram-slider" min="512" max="8192" step="512" value="2048">
+                    <span class="profile-ram-value" id="profileRamMaxVal">2G</span>
                   </div>
-                  <div class="profile-field-note">Ejemplos: 512M · 1G · 2G · 4G</div>
+                  <div class="profile-field-note" id="profileRamNote">detectando RAM…</div>
+                </div>
+                <div class="profile-settings-card-actions">
+                  <button class="profile-pill-btn accent" id="profileSaveRam">Guardar</button>
                 </div>
               </div>
 
@@ -134,7 +148,7 @@
                 <div class="profile-settings-card-icon"></div>
                 <div class="profile-settings-card-body">
                   <div class="profile-settings-card-label">Directorio de Minecraft</div>
-                  <input type="text" id="profileMcDir" class="profile-field-input" style="flex:1">
+                  <input type="text" id="profileMcDir" class="profile-field-input">
                 </div>
                 <div class="profile-settings-card-actions">
                   <button class="profile-pill-btn accent" id="profileSaveMcDir">Guardar</button>
@@ -142,16 +156,28 @@
               </div>
             </div>
 
+            <div class="profile-page-section" id="instancesSection">
+              <div class="profile-page-section-title">
+                Instancias
+                <button class="profile-instances-toggle" id="instancesToggleBtn" title="Mostrar / ocultar">
+                  <svg id="instancesChevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="6 9 12 15 18 9"/>
+                  </svg>
+                </button>
+              </div>
+              <div class="profile-instances-list" id="instancesList" style="display:none;">
+                <!-- Populated by JS -->
+              </div>
+            </div>
+
             <div class="profile-page-section">
               <div class="profile-page-section-title">Cuenta</div>
-              <button class="profile-danger-row" id="profileLogoutBtn">
-                <span class="profile-danger-icon"></span>
-                <div class="profile-danger-text">
-                  <div class="profile-danger-label">Cerrar sesión</div>
-                  <div class="profile-danger-desc"></div>
-                </div>
-                <span class="profile-danger-arrow"></span>
-              </button>
+              <div class="profile-danger-wrap">
+                <button class="profile-danger-row" id="profileLogoutBtn">
+                  <span class="profile-danger-icon"></span>
+                  <span class="profile-danger-label">Cerrar sesión</span>
+                </button>
+              </div>
             </div>
 
           </div>
@@ -273,7 +299,7 @@
     <div class="modal modal-settings">
       <div class="modal-header">
         <h2>Ajustes</h2>
-        <button class="modal-close-btn" onclick="closeModal('settingsModal')">✕</button>
+        <button class="modal-close-btn" id="closeSettingsBtn">✕</button>
       </div>
 
       <div class="settings-section">
@@ -312,6 +338,66 @@
           </div>
         </div>
       </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════
+       MODAL: Nueva Instancia
+       ══════════════════════════════════════════ -->
+  <div class="ni-overlay" id="newInstanceModal" style="display:none;">
+    <div class="ni-panel">
+
+      <button class="ni-close-btn" id="closeNewInstanceBtn">✕</button>
+
+      <!-- Icono decorativo -->
+      <div class="ni-hero">
+        <div class="ni-hero-glow"></div>
+        <button class="ni-logo-picker" id="niLogoPicker" title="Agregar logo personalizado" type="button">
+          <img id="niLogoPreview" class="ni-logo-preview" style="display:none;" alt="Logo">
+          <div class="ni-logo-placeholder" id="niLogoPlaceholder">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" xmlns="http://www.w3.org/2000/svg">
+              <line x1="12" y1="5" x2="12" y2="19"/>
+              <line x1="5" y1="12" x2="19" y2="12"/>
+            </svg>
+          </div>
+          <div class="ni-logo-edit-hint">Agregar logo</div>
+        </button>
+        <input id="niLogoInput" type="file" accept="image/*" style="display:none;">
+        <div class="ni-hero-title">Nueva instancia</div>
+        <div class="ni-hero-sub">Configura tu entorno de juego</div>
+      </div>
+
+      <!-- Nombre -->
+      <div class="ni-field-group">
+        <label class="ni-label">Nombre</label>
+        <input type="text" id="niName" class="ni-input"
+               placeholder="Mi instancia" maxlength="32"
+               autocomplete="off" spellcheck="false">
+      </div>
+
+      <!-- Versión -->
+      <div class="ni-field-group">
+        <label class="ni-label">Versión de Minecraft</label>
+        <select id="niVersion" class="ni-select">
+          <option value="">Cargando versiones…</option>
+        </select>
+        <label class="ni-toggle-label" style="margin-top:8px;">
+          <input type="checkbox" id="niSnapshots">
+          Incluir snapshots
+        </label>
+      </div>
+
+      <!-- Info automática -->
+      <div class="ni-auto-note">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        La configuración de controles y opciones se aplica automáticamente.
+      </div>
+
+      <div class="ni-btns">
+        <button class="ni-cancel" id="cancelNewInstanceBtn">Cancelar</button>
+        <button class="ni-confirm" id="confirmNewInstanceBtn">Crear instancia</button>
+      </div>
+
     </div>
   </div>
 

@@ -140,10 +140,15 @@ class Config {
       const payload = JSON.stringify({ accessToken, refreshToken })
       await keytar.setPassword(KEYTAR_SERVICE, KEYTAR_ACCOUNT, payload)
     } else {
-      // Fallback: guardar en archivo separado de auth metadata
-      // para que no queden expuestos en el objeto _auth que usa get()
+      // Fallback: guardar en archivo separado de auth metadata.
+      // FIX 5: modo 0o600 para que solo el usuario propietario pueda leer
+      // el archivo — evita que otros usuarios del sistema accedan al token.
       const tokenFile = path.join(CONFIG_DIR, 'tokens.json')
-      writeJSON(tokenFile, { accessToken, refreshToken })
+      try {
+        fs.writeFileSync(tokenFile, JSON.stringify({ accessToken, refreshToken }), { encoding: 'utf-8', mode: 0o600 })
+      } catch (e) {
+        console.error(`[config] Error escribiendo tokens:`, e.message)
+      }
     }
   }
 
@@ -152,7 +157,9 @@ class Config {
       try {
         const raw = await keytar.getPassword(KEYTAR_SERVICE, KEYTAR_ACCOUNT)
         if (raw) return JSON.parse(raw)
-      } catch {}
+      } catch (e) {
+          console.error(e)
+}
       return { accessToken: '', refreshToken: '' }
     } else {
       // Fallback: leer del archivo de tokens separado
@@ -161,17 +168,23 @@ class Config {
         if (fs.existsSync(tokenFile)) {
           return JSON.parse(fs.readFileSync(tokenFile, 'utf-8'))
         }
-      } catch {}
+      } catch (e) {
+          console.error(e)
+}
       return { accessToken: '', refreshToken: '' }
     }
   }
 
   async clearTokens() {
     if (keytar) {
-      try { await keytar.deletePassword(KEYTAR_SERVICE, KEYTAR_ACCOUNT) } catch {}
+      try { await keytar.deletePassword(KEYTAR_SERVICE, KEYTAR_ACCOUNT) } catch (e) {
+          console.error(e)
+}
     } else {
       const tokenFile = path.join(CONFIG_DIR, 'tokens.json')
-      try { if (fs.existsSync(tokenFile)) fs.unlinkSync(tokenFile) } catch {}
+      try { if (fs.existsSync(tokenFile)) fs.unlinkSync(tokenFile) } catch (e) {
+          console.error(e)
+}
     }
   }
 
